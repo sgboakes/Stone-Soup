@@ -75,9 +75,13 @@ class _Plotter(ABC):
         conv_detections = {}
         conv_clutter = {}
         for state in measurements:
-            meas_model = state.measurement_model  # measurement_model from detections
-            if meas_model is None:
+            if state.measurement_model is not None:
+                meas_model = state.measurement_model  # measurement_model from detections
+            elif measurement_model is not None:
                 meas_model = measurement_model  # measurement_model from input
+            else:
+                raise RuntimeError('Measurements must have measurement_model or one must'
+                                   'be provided')
 
             if not convert_measurements:
                 state_vec = state.state_vector[mapping, :]

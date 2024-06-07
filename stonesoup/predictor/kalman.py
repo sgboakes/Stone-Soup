@@ -382,7 +382,7 @@ class UnscentedKalmanPredictor(KalmanPredictor):
         transition_and_control_function = partial(
             self._transition_and_control_function,
             control_input=control_input,
-            time_interval=predict_over_interval)
+            time_interval=predict_over_interval, **kwargs)
 
         # Put these through the unscented transform, together with the total
         # covariance to get the parameters of the Gaussian

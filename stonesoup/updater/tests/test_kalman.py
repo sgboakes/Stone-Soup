@@ -16,7 +16,8 @@ from stonesoup.updater.kalman import (KalmanUpdater,
                                       IteratedKalmanUpdater,
                                       SchmidtKalmanUpdater,
                                       CubatureKalmanUpdater,
-                                      StochasticIntegrationUpdater)
+                                      StochasticIntegrationUpdater,
+                                      CUTKalmanUpdater)
 from stonesoup.predictor.kalman import CubatureKalmanPredictor
 from stonesoup.models.transition.linear import (CombinedLinearGaussianTransitionModel,
                                                 ConstantVelocity)
@@ -44,34 +45,34 @@ def test_kalman_covariance_stability():
     prediction = GaussianStatePrediction(
         state_vector=np.zeros((6, 1)),
         covar=np.array([
-            [1.64385383e+06,  1.00001250e+06, -2.48073899e+05,
-                -5.86573934e-08, -4.03756199e+05, -5.86573934e-08],
-            [1.00001250e+06,  1.00002500e+06,  5.24472545e-09,
-                0.00000000e+00, -3.90355011e-08,  0.00000000e+00],
-            [-2.48073899e+05,  5.24472545e-09,  2.03087457e+06,
-                1.92001250e+06,  1.58877383e+05,  1.34045255e-08],
-            [-5.86573934e-08,  0.00000000e+00,  1.92001250e+06,
-                1.92002500e+06, -2.38775732e-09,  0.00000000e+00],
-            [-4.03756199e+05, -3.90355011e-08,  1.58877383e+05,
-                -2.38775732e-09,  2.19190854e+06,  1.92001250e+06],
-            [-5.86573934e-08,  0.00000000e+00,  1.34045255e-08,
-                0.00000000e+00,  1.92001250e+06,  1.92002500e+06]
+            [1.64385383e+06, 1.00001250e+06, -2.48073899e+05,
+             -5.86573934e-08, -4.03756199e+05, -5.86573934e-08],
+            [1.00001250e+06, 1.00002500e+06, 5.24472545e-09,
+             0.00000000e+00, -3.90355011e-08, 0.00000000e+00],
+            [-2.48073899e+05, 5.24472545e-09, 2.03087457e+06,
+             1.92001250e+06, 1.58877383e+05, 1.34045255e-08],
+            [-5.86573934e-08, 0.00000000e+00, 1.92001250e+06,
+             1.92002500e+06, -2.38775732e-09, 0.00000000e+00],
+            [-4.03756199e+05, -3.90355011e-08, 1.58877383e+05,
+             -2.38775732e-09, 2.19190854e+06, 1.92001250e+06],
+            [-5.86573934e-08, 0.00000000e+00, 1.34045255e-08,
+             0.00000000e+00, 1.92001250e+06, 1.92002500e+06]
         ])
     )
     measurement_prediction = GaussianMeasurementPrediction(
         state_vector=np.zeros((3, 1)),
         covar=np.array([
-            [4.25607853e-02,  3.37582173e-03, -1.40573707e+00],
-            [3.37582173e-03,  4.18898195e-02, -2.22353400e+01],
-            [-1.40573707e+00, -2.22353400e+01,  3.24759672e+06],
+            [4.25607853e-02, 3.37582173e-03, -1.40573707e+00],
+            [3.37582173e-03, 4.18898195e-02, -2.22353400e+01],
+            [-1.40573707e+00, -2.22353400e+01, 3.24759672e+06],
         ]),
         cross_covar=np.array([
-            [-6.70207286e+01,  2.17782708e+02,  3.13723904e+06],
-            [-6.13505872e+01,  1.99344484e+02,  1.56529358e+06],
-            [-5.19907012e+02,  7.23354556e+01, -1.70022791e+06],
-            [-5.18271180e+02,  7.80151873e+01, -1.08255080e+06],
-            [1.95377768e+02,  4.52672009e+02, -2.79383465e+06],
-            [1.90861853e+02,  4.59621649e+02, -1.78870865e+06],
+            [-6.70207286e+01, 2.17782708e+02, 3.13723904e+06],
+            [-6.13505872e+01, 1.99344484e+02, 1.56529358e+06],
+            [-5.19907012e+02, 7.23354556e+01, -1.70022791e+06],
+            [-5.18271180e+02, 7.80151873e+01, -1.08255080e+06],
+            [1.95377768e+02, 4.52672009e+02, -2.79383465e+06],
+            [1.90861853e+02, 4.59621649e+02, -1.78870865e+06],
         ]),
     )
     measurement = Detection(
@@ -133,7 +134,7 @@ def test_kalman(updater_class, use_joseph_cov):
         + kalman_gain @ (measurement.state_vector
                          - eval_measurement_prediction.mean),
         prediction.covar
-        - kalman_gain@eval_measurement_prediction.covar @ kalman_gain.T)
+        - kalman_gain @ eval_measurement_prediction.covar @ kalman_gain.T)
 
     # Initialise a kalman updater
     updater = updater_class(measurement_model=measurement_model, use_joseph_cov=use_joseph_cov)
@@ -236,13 +237,13 @@ def test_sqrt_kalman():
     assert np.allclose(posterior_q.mean, eval_posterior.mean, 0, atol=1.e-14)
     assert np.allclose(posterior.covar, eval_posterior.covar, 0, atol=1.e-14)
     assert np.allclose(eval_posterior.covar,
-                       posterior_s.sqrt_covar@posterior_s.sqrt_covar.T, 0,
+                       posterior_s.sqrt_covar @ posterior_s.sqrt_covar.T, 0,
                        atol=1.e-14)
     assert np.allclose(posterior.covar,
-                       posterior_s.sqrt_covar@posterior_s.sqrt_covar.T, 0,
+                       posterior_s.sqrt_covar @ posterior_s.sqrt_covar.T, 0,
                        atol=1.e-14)
     assert np.allclose(posterior.covar,
-                       posterior_q.sqrt_covar@posterior_q.sqrt_covar.T, 0,
+                       posterior_q.sqrt_covar @ posterior_q.sqrt_covar.T, 0,
                        atol=1.e-14)
     # I'm not sure this is going to be true in all cases. Keep in order to find edge cases
     assert np.allclose(posterior_s.covar, posterior_q.covar, 0, atol=1.e-14)
@@ -272,9 +273,9 @@ def test_sqrt_kalman():
 
     # Test that the square root form succeeds where the standard form fails
     assert not np.allclose(posterior.covar, eval_posterior.covar, rtol=5.e-3)
-    assert np.allclose(posterior_s.sqrt_covar@posterior_s.sqrt_covar.T,
+    assert np.allclose(posterior_s.sqrt_covar @ posterior_s.sqrt_covar.T,
                        eval_posterior.covar, rtol=5.e-3)
-    assert np.allclose(posterior_q.sqrt_covar@posterior_s.sqrt_covar.T,
+    assert np.allclose(posterior_q.sqrt_covar @ posterior_s.sqrt_covar.T,
                        eval_posterior.covar, rtol=5.e-3)
 
 
@@ -292,7 +293,7 @@ def test_schmidtkalman():
     state_vector[2] = 0.7
 
     covariance = np.diag(np.ones(nelements))
-    covariance_con = np.diag(np.ones(nelements-2))
+    covariance_con = np.diag(np.ones(nelements - 2))
     covariance_noncon = np.array([[4.1123, 0.0013], [0.0013, 0.0365]])
     covariance[np.ix_(~consider, ~consider)] = covariance_noncon
     covariance[np.ix_(consider, consider)] = covariance_con
@@ -311,3 +312,103 @@ def test_schmidtkalman():
 
     assert np.allclose(update.mean, sk_update.mean)
     assert np.allclose(update.covar, sk_update.covar)
+
+
+@pytest.mark.parametrize(
+    "cut_ord, measurement_model, prediction, measurement",
+    [
+        (  # Standard Kalman
+                4,
+                LinearGaussian(ndim_state=2, mapping=[0],
+                               noise_covar=np.array([[0.04]])),
+                GaussianStatePrediction(np.array([[-6.45], [0.7]]),
+                                        np.array([[4.1123, 0.0013],
+                                                  [0.0013, 0.0365]])),
+                Detection(np.array([[-6.23]]))
+        ),
+        (  # Extended Kalman
+                6,
+                LinearGaussian(ndim_state=2, mapping=[0],
+                               noise_covar=np.array([[0.04]])),
+                GaussianStatePrediction(np.array([[-6.45], [0.7]]),
+                                        np.array([[4.1123, 0.0013],
+                                                  [0.0013, 0.0365]])),
+                Detection(np.array([[-6.23]]))
+        ),
+        (  # Unscented Kalman
+                8,
+                LinearGaussian(ndim_state=2, mapping=[0],
+                               noise_covar=np.array([[0.04]])),
+                GaussianStatePrediction(np.array([[-6.45], [0.7]]),
+                                        np.array([[4.1123, 0.0013],
+                                                  [0.0013, 0.0365]])),
+                Detection(np.array([[-6.23]]))
+        ),
+    ],
+    ids=["CUT4", "CUT6", "CUT8"]
+)
+def test_cut_kalman(cut_ord, measurement_model,
+                    prediction, measurement):  # why does this not use CUT_ord?
+
+    # Calculate evaluation variables
+    eval_measurement_prediction = GaussianMeasurementPrediction(
+        measurement_model.matrix() @ prediction.mean,
+        measurement_model.matrix() @ prediction.covar
+        @ measurement_model.matrix().T
+        + measurement_model.covar(),
+        cross_covar=prediction.covar @ measurement_model.matrix().T)
+    kalman_gain = eval_measurement_prediction.cross_covar @ np.linalg.inv(
+        eval_measurement_prediction.covar)
+    eval_posterior = GaussianState(
+        prediction.mean
+        + kalman_gain @ (measurement.state_vector
+                         - eval_measurement_prediction.mean),
+        prediction.covar
+        - kalman_gain @ eval_measurement_prediction.covar @ kalman_gain.T)
+
+    # Initialise a kalman updater
+    updater = CUTKalmanUpdater(measurement_model=measurement_model,
+                               cut_order=4)  # Shouldn't CUT_ord be here?
+
+    # Get and assert measurement prediction
+    measurement_prediction = updater.predict_measurement(prediction)
+    assert (np.allclose(measurement_prediction.mean,
+                        eval_measurement_prediction.mean,
+                        0, atol=1.e-14))
+    assert (np.allclose(measurement_prediction.covar,
+                        eval_measurement_prediction.covar,
+                        0, atol=1.e-14))
+    assert (np.allclose(measurement_prediction.cross_covar,
+                        eval_measurement_prediction.cross_covar,
+                        0, atol=1.e-14))
+
+    # Perform and assert state update (without measurement prediction)
+    posterior = updater.update(SingleHypothesis(
+        prediction=prediction,
+        measurement=measurement))
+    assert (np.allclose(posterior.mean, eval_posterior.mean, 0, atol=1.e-14))
+    assert (np.allclose(posterior.covar, eval_posterior.covar, 0, atol=1.e-14))
+    assert (np.array_equal(posterior.hypothesis.prediction, prediction))
+    assert (np.allclose(
+        posterior.hypothesis.measurement_prediction.state_vector,
+        measurement_prediction.state_vector, 0, atol=1.e-14))
+    assert (np.allclose(posterior.hypothesis.measurement_prediction.covar,
+                        measurement_prediction.covar, 0, atol=1.e-14))
+    assert (np.array_equal(posterior.hypothesis.measurement, measurement))
+    assert (posterior.timestamp == prediction.timestamp)
+
+    # Perform and assert state update
+    posterior = updater.update(SingleHypothesis(
+        prediction=prediction,
+        measurement=measurement,
+        measurement_prediction=measurement_prediction))
+    assert (np.allclose(posterior.mean, eval_posterior.mean, 0, atol=1.e-14))
+    assert (np.allclose(posterior.covar, eval_posterior.covar, 0, atol=1.e-14))
+    assert (np.array_equal(posterior.hypothesis.prediction, prediction))
+    assert (np.allclose(
+        posterior.hypothesis.measurement_prediction.state_vector,
+        measurement_prediction.state_vector, 0, atol=1.e-14))
+    assert (np.allclose(posterior.hypothesis.measurement_prediction.covar,
+                        measurement_prediction.covar, 0, atol=1.e-14))
+    assert (np.array_equal(posterior.hypothesis.measurement, measurement))
+    assert (posterior.timestamp == prediction.timestamp)

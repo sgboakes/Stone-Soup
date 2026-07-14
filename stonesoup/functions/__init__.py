@@ -8,8 +8,10 @@ from functools import lru_cache
 import numpy as np
 from numpy import linalg as LA
 
+from scipy.linalg import sqrtm
 from scipy.stats import ortho_group
 
+from .cut_points_gaussian import cut_points_gaussian
 from ..types.array import CovarianceMatrix, StateVector, StateVectors
 from ..types.numeric import Probability
 from ..types.state import State
@@ -1281,3 +1283,166 @@ def batch_multivariate_normal_logpdf(vectors, states):
         )
 
     return logpdfs
+
+
+def gauss2cut(state, normed_sigma_pts):
+    """
+    Approximate a given Gaussian state variable, using a
+    deterministically selected set of normalized sigma points
+    representing a zero-mean unity Gaussian distribution.
+
+    Parameters
+    ----------
+    state : :class:`~State`
+        A state object capable of returning a :class:`~.StateVector` of
+        shape `(Ns, 1)` representing the Gaussian mean and a
+        :class:`~.CovarianceMatrix` of shape `(Ns, Ns)` which is the
+        covariance of the distribution
+    normed_sigma_pts : :class:`~StateVectors`
+        Deterministically selected set of normalized sigma points
+        representing a zero-mean unity Gaussian distribution.  Must be
+        of shape `(Ns, Np)` where `Np` is the number of normalized sigma
+        points, i.e. is a function of the quadrature method chosen
+        outside of this function.
+
+
+    Returns
+    -------
+    : :class:`list` of length `Np`
+        An list of States containing the locations of the sigma points.
+        Note that only the :attr:`state_vector` attribute in these
+        States will be meaningful. Other quantities, like :attr:`covar`
+        will be inherited from the input and don't really make sense
+        for a sigma point.
+    """
+    ndim_state = np.shape(state.state_vector)[0]
+
+    # Compute Square Root matrix via scipy.linalg.sqrtm
+    sqrt_sigma = sqrtm(state.covar)
+
+    normed_sigma_pts = normed_sigma_pts.reshape(ndim_state, -1)
+
+    sigma_points = sqrt_sigma @ normed_sigma_pts + state.state_vector
+
+    # Put these sigma points into s State object list
+    sigma_points_states = []
+    # Originally was sigma_points.T, which is wrong. How did this ever work?
+    for sigma_point in sigma_points:
+        state_copy = copy.copy(state)
+        state_copy.state_vector = StateVector(sigma_point)
+        sigma_points_states.append(state_copy)
+
+    return sigma_points_states
+
+
+# TODO: Possible rename because it should be viable for any quadrature method
+def conjugate_unscented_transform(sigma_points_states, wghts, fun,
+                                  points_noise=None, covar_noise=None):
+    """
+    Use the Conjugate Unscented Transform to approximate the mean and
+    covariance resulting from a random variable input to a (often non-linear)
+    function `f`.
+
+    Apply `f` to points (with secondary argument points_noise, if available),
+    then approximate the resulting mean and covariance. If sigma_noise is
+    available, treat it as additional variance due to additive noise.
+
+    Parameters
+    ----------
+    sigma_points_states : `list` of length `(Np)`
+        List of state objects corresponding to the Np sigma points
+    wghts : :class:`numpy.ndarray` of shape `(Np,)`
+        An array containing the sigma point weights
+    fun : function handle
+        A (non-linear) transition function
+        Must be of the form "y = fun(x,w)", where y can be a scalar or \
+        :class:`numpy.ndarray` of shape `(Ns, 1)` or `(Ns,)`
+    covar_noise : :class:`~.CovarianceMatrix` of shape `(Ns, Ns)`, optional
+        Additive noise covariance matrix
+        (default is `None`)
+    points_noise : :class:`numpy.ndarray` of shape `(Ns, 2*Ns+1,)`, optional
+        points to pass into f's second argument
+        (default is `None`)
+
+    Returns
+    -------
+    : :class:`~.StateVector` of shape `(Ns, 1)`
+        Transformed mean
+    : :class:`~.CovarianceMatrix` of shape `(Ns, Ns)`
+        Transformed covariance
+    : :class:`~.CovarianceMatrix` of shape `(Ns,Nm)`
+        Calculated cross-covariance matrix
+    : :class:`~.StateVectors` of shape `(Ns, Np)`
+        An array containing the locations of the transformed sigma points
+    : :class:`numpy.ndarray` of shape `(Np,)`
+        An array containing the transformed sigma point weights
+    """
+
+    # Reconstruct the sigma_points matrix
+    sigma_points = StateVectors([
+        sigma_points_state.state_vector for sigma_points_state in sigma_points_states])
+    sigma_mean = np.average(sigma_points, axis=1, weights=wghts)
+
+    # Transform points through f
+    if points_noise is None:
+        sigma_points_t = StateVectors([
+            fun(sigma_points_state) for sigma_points_state in sigma_points_states])
+    else:
+        sigma_points_t = StateVectors([
+            fun(sigma_points_state, points_noise)  # is this a bug?
+            for sigma_points_state, point_noise in zip(sigma_points_states, points_noise.T)])
+        # This is probably a bug and it's in the original UT function.
+
+    # Calculate mean and covariance approximation
+    mean, covar = sigma2gauss(sigma_points_t, wghts, wghts, covar_noise)
+
+    # Calculate cross-covariance
+    cross_covar = (
+        (sigma_points-sigma_mean) @ np.diag(wghts) @ (sigma_points_t-mean).T
+        ).view(CovarianceMatrix)
+
+    return mean, covar, cross_covar, sigma_points_t, wghts
+
+
+def get_cut_points(n_dim, cut_order, distribution='gaussian'):
+    r"""
+    Function to retieve normalized sigma points for the Conjugate Unscented Transform.
+    Takes the :class:`numpy.ndarray` from the sigma point storage files and renormalizes
+    the sigma points to reduce truncation errors.
+
+    Parameters
+    ----------
+    n_dim : int
+        State dimension. Bounds on the state dimension for each distribution are
+        stored in the sigma point storage files.
+
+    cut_order : int
+        Integer of either 4, 6, or 8 to generate sigma points for fourth,
+        sixth, or eighth order CUT method.
+
+    distribution: str
+        From what distribution to genereate the CUT sigma points.  As currently
+        implemented, 'gaussian' is the only available option.
+
+    Raises
+    ------
+    ValueError
+        If distribution string does not match available methods.
+    """
+    if distribution == 'gaussian':
+        nrm_cut_pts_weights = cut_points_gaussian(n_dim, cut_order)
+
+        # renormalize weights return (fixes some truncation error)
+        wghts = nrm_cut_pts_weights[:, -1]
+        wghts = wghts/sum(wghts)
+
+        # renormalize points return (fixes some truncation error)
+        pts = StateVectors(nrm_cut_pts_weights[:, 0:-1].T)
+        num_covar = pts@np.diag(wghts)@pts.T
+        pts = np.linalg.inv(np.linalg.cholesky(num_covar))@pts
+
+    else:
+        raise ValueError("""Please define "distribution" as: "gaussian."
+                         """)
+
+    return pts, wghts

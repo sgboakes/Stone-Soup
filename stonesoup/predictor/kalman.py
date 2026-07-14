@@ -14,7 +14,8 @@ from ..models.transition.linear import LinearGaussianTransitionModel
 from ..models.control import ControlModel
 from ..models.control.linear import LinearControlModel
 from ..functions import (gauss2sigma, unscented_transform, cubature_transform,
-                         cub_points_and_tf)
+                         cub_points_and_tf, gauss2cut, conjugate_unscented_transform,
+                         get_cut_points)
 
 
 class KalmanPredictor(Predictor):
@@ -472,13 +473,13 @@ class SqrtKalmanPredictor(ExtendedKalmanPredictor):
         if self.qr_method:
             # Note that the control matrix aspect of this hasn't been tested
             m_sq_trans_cov = np.block([[trans_m @ sqrt_prior_cov, sqrt_trans_cov,
-                                        ctrl_mat@sqrt_ctrl_noi]])
+                                        ctrl_mat @ sqrt_ctrl_noi]])
             _, pred_sqrt_cov = np.linalg.qr(m_sq_trans_cov.T)
             return pred_sqrt_cov.T
         else:
-            return np.linalg.cholesky(trans_m@sqrt_prior_cov@sqrt_prior_cov.T@trans_m.T +
-                                      sqrt_trans_cov@sqrt_trans_cov.T +
-                                      ctrl_mat@sqrt_ctrl_noi@sqrt_ctrl_noi.T@ctrl_mat.T)
+            return np.linalg.cholesky(trans_m @ sqrt_prior_cov @ sqrt_prior_cov.T @ trans_m.T +
+                                      sqrt_trans_cov @ sqrt_trans_cov.T +
+                                      ctrl_mat @ sqrt_ctrl_noi @ sqrt_ctrl_noi.T @ ctrl_mat.T)
 
 
 class CubatureKalmanPredictor(KalmanPredictor):
@@ -535,7 +536,7 @@ class CubatureKalmanPredictor(KalmanPredictor):
         ctrl_noi = self.control_model.covar(time_interval=predict_over_interval, **kwargs)
         total_noise_covar = \
             self.transition_model.covar(time_interval=predict_over_interval, **kwargs) \
-            + ctrl_mat@ctrl_noi@ctrl_mat.T
+            + ctrl_mat @ ctrl_noi @ ctrl_mat.T
 
         # This ensures that function passed to transform has the correct time interval and control
         # input
@@ -562,7 +563,7 @@ class StochasticIntegrationPredictor(KalmanPredictor):
     control_model: ControlModel = Property(
         default=None,
         doc="The control model to be used. Default `None` where the predictor "
-        "will create a zero-effect linear :class:`~.ControlModel`.",
+            "will create a zero-effect linear :class:`~.ControlModel`.",
     )
     Nmax: int = Property(default=10, doc="maximal number of iterations of SIR")
     Nmin: int = Property(
@@ -668,7 +669,7 @@ class StochasticIntegrationPredictor(KalmanPredictor):
             control_input, prior=prior, time_interval=predict_over_interval, **kwargs)
         ctrl_noi = self.control_model.covar(time_interval=predict_over_interval, **kwargs)
         Q = self.transition_model.covar(time_interval=predict_over_interval, **kwargs) \
-            + ctrl_mat@ctrl_noi@ctrl_mat.T
+            + ctrl_mat @ ctrl_noi @ ctrl_mat.T
 
         Pp = IPx + Q + np.diag(Vx.ravel())
         Pp = (Pp + Pp.T) / 2
@@ -683,3 +684,118 @@ class StochasticIntegrationPredictor(KalmanPredictor):
             transition_model=self.transition_model,
             prior=prior,
         )
+
+
+class CUTKalmanPredictor(KalmanPredictor):
+    """ CUTKalmanPredictor class
+
+    Similarly design to the UnscentedKalmanPredictor class. The normalised
+    sigma points are defined using `stonesoup.functions.get_CUT_points`.
+    These normalised points are transformed to reflect the apriori Gaussian
+    state, put through the transition and control function, then define
+    the new Gaussian.
+    """
+
+    transition_model: TransitionModel = Property(doc="The transition model to be used.")
+    control_model: ControlModel = Property(
+        default=None,
+        doc="The control model to be used. Default `None` where the predictor "
+            "will create a zero-effect linear :class:`~.ControlModel`.")
+    cut_order: int = Property(
+        default=4,
+        doc="The order of the polynomial in which the conjugate unscented "
+            "transform can integrate exactly. Default is fourth-order. State "
+            "dimension must be between 2 and 10 for fourth-order CUT, 2 and 9 "
+            "for sixth-order CUT, and 2 and 6 for eighth-order CUT.")
+    noise_distribution: str = Property(
+        default='gaussian',
+        doc="The distribution which define the CUT sigma points.")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        cut_pts, wght = get_cut_points(self.transition_model.ndim,
+                                       self.cut_order,
+                                       distribution=self.noise_distribution)
+
+        self.nrm_sigma_pts = cut_pts
+        self.sig_wghts = wght
+
+        self._time_interval = None
+
+    def _transition_and_control_function(self, prior_state, **kwargs):
+        r"""Returns the result of applying the transition and control functions
+        for the unscented transform
+
+        Parameters
+        ----------
+        prior_state_vector : :class:`~.State`
+            Prior state vector
+        **kwargs : various, optional
+            These are passed to :class:`~.TransitionModel.function`
+
+        Returns
+        -------
+        : :class:`numpy.ndarray`
+            The combined, noiseless, effect of applying the transition and
+            control
+        """
+
+        return (self.transition_model.function(prior_state, **kwargs)
+                + self.control_model.function(**kwargs))
+
+    @predict_lru_cache()
+    def predict(self, prior, timestamp=None, control_input=None, **kwargs):
+        r"""The conjugate unscented version of the prediction step
+
+        Parameters
+        ----------
+        prior : :class:`~.GaussianState`
+            Prior state, :math:`\mathbf{x}_{k-1}` with prior covariance :math:`P_{k-1|k-1}`
+        timestamp : :class:`datetime.datetime`
+            Time to transit to (:math:`k`)
+        **kwargs : various, optional
+            These are passed to :meth:`~.TransitionModel.covar`
+
+        Returns
+        -------
+        : :class:`~.GaussianStatePrediction`
+            The predicted state :math:`\mathbf{x}_{k|k-1}` and the predicted
+            state covariance :math:`P_{k|k-1}`
+        """
+
+        # Get the prediction interval
+        predict_over_interval = self._predict_over_interval(prior, timestamp)
+
+        # Note, derived from the Unscented Kalman Predictor, so issue here
+        # still stands:
+        # The covariance on the transition model + the control model
+        # TODO: Note that I'm not sure you can actually do this with the
+        # TODO: covariances, i.e. sum them before calculating
+        # TODO: the sigma points and then just sticking them into the
+        # TODO: unscented transform, and I haven't checked the statistics.
+        # total_noise_covar = self.transition_model.covar(
+        #         time_interval=predict_over_interval, **kwargs) \
+        #     + self.control_model.control_noise
+        ctrl_mat = self.control_model.matrix(time_interval=predict_over_interval, **kwargs)
+        ctrl_noi = self.control_model.covar(**kwargs)
+        total_noise_covar = \
+            self.transition_model.covar(time_interval=predict_over_interval, **kwargs) \
+            + ctrl_mat @ ctrl_noi @ ctrl_mat.T
+
+        # Convert normalised CUT sigma points to sigma points defined by the prior.
+        sigma_point_states = gauss2cut(prior, self.nrm_sigma_pts)
+
+        transition_and_control_function = partial(
+            self._transition_and_control_function,
+            control_input=control_input,
+            time_interval=predict_over_interval)
+
+        x_pred, p_pred, _, sigma_points_t, _ = conjugate_unscented_transform(
+            sigma_point_states, self.sig_wghts,
+            transition_and_control_function,
+            covar_noise=total_noise_covar
+        )
+
+        return Prediction.from_state(prior, x_pred, p_pred, timestamp=timestamp,
+                                     transition_model=self.transition_model)

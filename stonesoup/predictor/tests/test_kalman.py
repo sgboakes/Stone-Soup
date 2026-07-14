@@ -5,7 +5,8 @@ import numpy as np
 from ...models.transition.linear import ConstantVelocity
 from ...predictor.kalman import (
     KalmanPredictor, ExtendedKalmanPredictor, UnscentedKalmanPredictor,
-    SqrtKalmanPredictor, CubatureKalmanPredictor, StochasticIntegrationPredictor)
+    SqrtKalmanPredictor, CubatureKalmanPredictor, StochasticIntegrationPredictor,
+    CUTKalmanPredictor)
 from ...types.prediction import GaussianStatePrediction
 from ...types.state import GaussianState, SqrtGaussianState
 from ...types.track import Track
@@ -150,3 +151,70 @@ def test_sqrt_kalman():
                        atol=1.e-14)
     assert np.allclose(prediction.covar, sqrt_prediction.covar, 0, atol=1.e-14)
     assert prediction.timestamp == sqrt_prediction.timestamp
+
+
+@pytest.mark.parametrize(
+    "cut_ord, transition_model, prior_mean, prior_covar",
+    [
+        (   # CUT4
+            4,
+            ConstantVelocity(noise_diff_coeff=0.1),
+            np.array([[-6.45], [0.7]]),
+            np.array([[4.1123, 0.0013],
+                      [0.0013, 0.0365]])
+        ),
+        (   # CUT6
+            6,
+            ConstantVelocity(noise_diff_coeff=0.1),
+            np.array([[-6.45], [0.7]]),
+            np.array([[4.1123, 0.0013],
+                      [0.0013, 0.0365]])
+        ),
+        (   # CUT8
+            8,
+            ConstantVelocity(noise_diff_coeff=0.1),
+            np.array([[-6.45], [0.7]]),
+            np.array([[4.1123, 0.0013],
+                      [0.0013, 0.0365]])
+        )
+    ],
+    ids=["CUT4", "CUT6", "CUT8"]
+)
+def test_cut_kalman(cut_ord, transition_model,
+                    prior_mean, prior_covar):
+
+    # Define time related variables
+    timestamp = datetime.datetime.now()
+    timediff = 2  # 2sec
+    new_timestamp = timestamp + datetime.timedelta(seconds=timediff)
+    time_interval = new_timestamp - timestamp
+
+    # Define prior state
+    prior = GaussianState(prior_mean,
+                          prior_covar,
+                          timestamp=timestamp)
+
+    transition_model_matrix = transition_model.matrix(time_interval=time_interval)
+    transition_model_covar = transition_model.covar(time_interval=time_interval)
+    # Calculate evaluation variables
+    eval_prediction = GaussianStatePrediction(
+        transition_model_matrix @ prior.mean,
+        transition_model_matrix@prior.covar@transition_model_matrix.T + transition_model_covar)
+
+    # Initialise a kalman predictor
+    predictor = CUTKalmanPredictor(transition_model=transition_model, cut_order=cut_ord)
+
+    # Perform and assert state prediction
+    prediction = predictor.predict(prior=prior,
+                                   timestamp=new_timestamp)
+
+    # Assert presence of transition model
+    assert hasattr(prediction, 'transition_model')
+
+    assert np.allclose(prediction.mean,
+                       eval_prediction.mean, 0, atol=1.e-13)
+    assert np.allclose(prediction.covar,
+                       eval_prediction.covar, 0, atol=1.e-13)
+    assert prediction.timestamp == new_timestamp
+
+    # TODO: Test with Control Model

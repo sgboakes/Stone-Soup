@@ -31,7 +31,10 @@ from .. import (
     rotz,
     sphere2cart,
     stochastic_cubature_rule_points,
-    batch_multivariate_normal_logpdf
+    batch_multivariate_normal_logpdf,
+    cut_points_gaussian,
+    get_cut_points,
+    gauss2cut
 )
 
 
@@ -61,7 +64,7 @@ def test_cholesky_eps():
     matrix = np.array([[0.4, -0.2, 0.1],
                        [0.3, 0.1, -0.2],
                        [-0.3, 0.0, 0.4]])
-    matrix = matrix@matrix.T
+    matrix = matrix @ matrix.T
 
     cholesky_matrix = cholesky(matrix)
 
@@ -71,10 +74,10 @@ def test_cholesky_eps():
 
 def test_cholesky_eps_bad():
     matrix = np.array(
-        [[ 0.05201447,  0.02882126, -0.00569971, -0.00733617],  # noqa: E201
-         [ 0.02882126,  0.01642966, -0.00862847, -0.00673035],  # noqa: E201
-         [-0.00569971, -0.00862847,  0.06570757,  0.03251551],
-         [-0.00733617, -0.00673035,  0.03251551,  0.01648615]])
+        [[0.05201447, 0.02882126, -0.00569971, -0.00733617],  # noqa: E201
+         [0.02882126, 0.01642966, -0.00862847, -0.00673035],  # noqa: E201
+         [-0.00569971, -0.00862847, 0.06570757, 0.03251551],
+         [-0.00733617, -0.00673035, 0.03251551, 0.01648615]])
     with raises(LinAlgError):
         cholesky(matrix)
     cholesky_eps(matrix)
@@ -87,7 +90,7 @@ def test_jacobian():
     state_mean = StateVector([[3.0], [1.0]])
 
     def f(x):
-        return np.array([[1, 1], [0, 1]])@x.state_vector
+        return np.array([[1, 1], [0, 1]]) @ x.state_vector
 
     jac = jacobian(f, State(state_mean))
     assert np.allclose(jac, np.array([[1, 1], [0, 1]]))
@@ -99,23 +102,23 @@ def test_jacobian2():
     # Sample functions to compute Jacobian on
     def fun(x):
         """ function for testing scalars i.e. scalar input, scalar output"""
-        return 2*x.state_vector**2
+        return 2 * x.state_vector ** 2
 
     def fun1d(ins):
         """ test function with vector input, scalar output"""
-        out = 2*ins.state_vector[0, :]+3*ins.state_vector[1, :]
+        out = 2 * ins.state_vector[0, :] + 3 * ins.state_vector[1, :]
         return np.atleast_2d(out)
 
     def fun2d(vec):
         """ test function with 2d input and 2d output"""
         out = np.empty(vec.state_vector.shape)
-        out[0, :] = 2*vec.state_vector[0, :]**2 + 3*vec.state_vector[1, :]**2
-        out[1, :] = 2*vec.state_vector[0, :]+3*vec.state_vector[1, :]
+        out[0, :] = 2 * vec.state_vector[0, :] ** 2 + 3 * vec.state_vector[1, :] ** 2
+        out[1, :] = 2 * vec.state_vector[0, :] + 3 * vec.state_vector[1, :]
         return out
 
     x = 3
     jac = jacobian(fun, State(StateVector([[x]])))
-    assert np.allclose(jac, 4*x)
+    assert np.allclose(jac, 4 * x)
 
     x = StateVector([[1], [2]])
     # Tolerance value to use to test if arrays are equal
@@ -124,12 +127,12 @@ def test_jacobian2():
     jac = jacobian(fun1d, State(x))
     T = np.array([2.0, 3.0])
 
-    FOM = np.where(np.abs(jac-T) > tol)
+    FOM = np.where(np.abs(jac - T) > tol)
     # Check # of array elements bigger than tol
     assert len(FOM[0]) == 0
 
     jac = jacobian(fun2d, State(x))
-    T = np.array([[4.0*x[0], 6*x[1]],
+    T = np.array([[4.0 * x[0], 6 * x[1]],
                   [2, 3]])
     FOM = np.where(np.abs(jac - T) > tol)
     # Check # of array elements bigger than tol
@@ -142,7 +145,7 @@ def test_jacobian_param():
     # Sample functions to compute Jacobian on
     def fun(x, value=0.0):
         """ function for jabcobian parameter passing"""
-        return value*x.state_vector
+        return value * x.state_vector
 
     x = 4
     value = 2.0
@@ -155,14 +158,13 @@ def test_jacobian_large_values():
     state = State(StateVector([[1E10], [1.0]]))
 
     def f(x):
-        return x.state_vector**2
+        return x.state_vector ** 2
 
     jac = jacobian(f, state)
     assert np.allclose(jac, np.array([[2e10, 0.0], [0.0, 2.0]]))
 
 
 def test_gm_reduce_single():
-
     means = StateVectors([StateVector([1, 2]), StateVector([3, 4]), StateVector([5, 6])])
     covars = np.stack([[[1, 1], [1, 0.7]],
                        [[1.2, 1.4], [1.3, 2]],
@@ -219,8 +221,8 @@ def test_elevation():
 @pytest.mark.parametrize(
     "mean",
     [
-        1,      # int
-        1.0     # float
+        1,  # int
+        1.0  # float
     ]
 )
 def test_gauss2sigma(mean):
@@ -230,16 +232,16 @@ def test_gauss2sigma(mean):
     sigma_points_states, mean_weights, covar_weights = gauss2sigma(state, kappa=0)
 
     for n, sigma_point_state_vector in zip((0, 1, -1), sigma_points_states.state_vector):
-        assert sigma_point_state_vector[0, 0] == approx(mean + n*covar**0.5)
+        assert sigma_point_state_vector[0, 0] == approx(mean + n * covar ** 0.5)
 
 
 @pytest.mark.parametrize("gauss2x", [(gauss2sigma), (gauss2cubature)])
 def test_gauss2sigma_bad_covar(gauss2x):
     covar = np.array(
-        [[ 0.05201447,  0.02882126, -0.00569971, -0.00733617],  # noqa: E201
-         [ 0.02882126,  0.01642966, -0.00862847, -0.00673035],  # noqa: E201
-         [-0.00569971, -0.00862847,  0.06570757,  0.03251551],
-         [-0.00733617, -0.00673035,  0.03251551,  0.01648615]])
+        [[0.05201447, 0.02882126, -0.00569971, -0.00733617],  # noqa: E201
+         [0.02882126, 0.01642966, -0.00862847, -0.00673035],  # noqa: E201
+         [-0.00569971, -0.00862847, 0.06570757, 0.03251551],
+         [-0.00733617, -0.00673035, 0.03251551, 0.01648615]])
     state = GaussianState([[0], [0], [0], [0]], covar)
 
     with pytest.warns(UserWarning, match="Matrix is not positive definite"):
@@ -250,19 +252,18 @@ def test_gauss2sigma_bad_covar(gauss2x):
     "angle",
     [
         (
-            np.array([np.pi]),  # angle
-            np.array([np.pi / 2]),
-            np.array([-np.pi]),
-            np.array([-np.pi / 2]),
-            np.array([np.pi / 4]),
-            np.array([-np.pi / 4]),
-            np.array([np.pi / 8]),
-            np.array([-np.pi / 8]),
+                np.array([np.pi]),  # angle
+                np.array([np.pi / 2]),
+                np.array([-np.pi]),
+                np.array([-np.pi / 2]),
+                np.array([np.pi / 4]),
+                np.array([-np.pi / 4]),
+                np.array([np.pi / 8]),
+                np.array([-np.pi / 8]),
         )
     ]
 )
 def test_rotations(angle):
-
     c, s = np.cos(angle), np.sin(angle)
     zero = np.zeros_like(angle)
     one = np.ones_like(angle)
@@ -291,7 +292,6 @@ def test_rotations(angle):
     ]
 )
 def test_cart_sphere_inversions(x, y, z):
-
     rho, phi, theta = cart2sphere(x, y, z)
 
     # Check sphere2cart(cart2sphere(cart)) == cart
@@ -316,10 +316,9 @@ def test_cart_sphere_inversions(x, y, z):
         (Matrix([[1, 0], [0, 1]]), Matrix([[3, 1], [1, -3]])),
         (StateVectors([[1, 0], [0, 1]]), StateVectors([[3, 1], [1, -3]])),
         (StateVectors([[1, 0], [0, 1]]), StateVector([3, 1]))
-     ]
+    ]
 )
 def test_dotproduct(state_vector1, state_vector2):
-
     # Test that they raise the right error if not 1d, i.e. vectors
     if type(state_vector1) is not type(state_vector2):
         with pytest.raises(ValueError):
@@ -354,18 +353,18 @@ def test_dotproduct(state_vector1, state_vector2):
         ), (
             StateVectors(np.array([[20, 30, 40, 50], [20, 30, 40, 50]])),  # means
             [np.eye(2), np.eye(2), np.eye(2), np.eye(2)],  # covars
-            np.array([1/4]*4),  # weights
+            np.array([1 / 4] * 4),  # weights
             20  # size
         ), (
             [np.array([10, 10]), np.array([20, 20]), np.array([30, 30])],  # means
             np.array([np.eye(2), np.eye(2), np.eye(2)]),  # covars
-            np.array([1/3]*3),  # weights
+            np.array([1 / 3] * 3),  # weights
             20  # size
         ), (
             [StateVector(np.array([10, 10])), StateVector(np.array([20, 20])),
              StateVector(np.array([30, 30]))],  # means
             [np.eye(2), np.eye(2), np.eye(2)],  # covars
-            np.array([1/3]*3),  # weights
+            np.array([1 / 3] * 3),  # weights
             20  # size
         ), (
             StateVector(np.array([10, 10])),  # means
@@ -416,7 +415,6 @@ def test_gm_sample(means, covars, weights, size):
     ]
 )
 def test_cubature_transform(mean, covar, alp):
-
     instate = GaussianState(mean, covar)
 
     def identity_function(inpu):
@@ -505,3 +503,68 @@ def test_batch_multivariate_normal_logpdf():
         scipy_logpdf_results.append(logpdf)
 
     assert np.allclose(batch_logpdf_results, np.array(scipy_logpdf_results), atol=1e-8)
+
+
+def test_cut_points_gaussian():
+    ndims = list(range(1, 15))
+    for ndim in ndims:
+        for cut_order in [2, 4, 6, 8]:
+            if cut_order == 2:
+                with raises(ValueError, match=r"cut_order .*"):
+                    cut_points_gaussian(ndim, cut_order)
+            elif (cut_order == 4 and not (2 <= ndim <= 10)):
+                with raises(ValueError, match=r".* <= n_dim <= .*"):
+                    cut_points_gaussian(ndim, cut_order)
+            elif (cut_order == 6 and not (2 <= ndim <= 9)):
+                with raises(ValueError, match=r".* <= n_dim <= .*"):
+                    cut_points_gaussian(ndim, cut_order)
+            elif (cut_order == 8 and not (2 <= ndim <= 6)):
+                with raises(ValueError, match=r".* <= n_dim <= .*"):
+                    cut_points_gaussian(ndim, cut_order)
+            else:
+                cut_points_gaussian(ndim, cut_order)
+
+
+@pytest.mark.parametrize(
+    "dist",
+    [
+        "gaussian",
+    ]
+)
+def test_get_cut_points(dist):
+    with raises(ValueError, match=r".*distribution.*"):
+        pts, wghts = get_cut_points(2, 4,
+                                    distribution='NotImplemented')
+
+    if dist == "gaussian":
+        pts, wghts = get_cut_points(2, 4, distribution=dist)
+        num_mean = np.average(pts, axis=1, weights=wghts)
+        num_Covar = pts @ np.diag(wghts) @ pts.T
+
+        assert np.allclose(np.zeros((2, 1)), num_mean, 0, atol=5.e-14)
+        assert np.allclose(num_Covar, np.eye(2), 0, atol=5.e-14)
+
+
+@pytest.mark.parametrize("ndim", list(range(2, 7)),
+                         ids=lambda d: f"state dim. = {d}")
+@pytest.mark.parametrize("cut_order", [4, 6, 8],
+                         ids=lambda d: f"cut Order {d}")
+def test_gauss2cut(ndim, cut_order):
+    mean = StateVector(10 * np.ones((ndim, 1)))
+    covar = 10. * np.eye(ndim) + 0.000003 * np.ones((ndim, ndim))
+    state = GaussianState(mean, covar)
+
+    cutpts, wght = get_cut_points(ndim, cut_order, distribution='gaussian')
+
+    sigma_points_states = gauss2cut(state, cutpts)
+    sigma_points = StateVectors([
+        sigma_points_state.state_vector
+        for sigma_points_state in sigma_points_states])
+
+    eval_mean = np.average(sigma_points, axis=1, weights=wght)
+    points_diff = sigma_points - mean
+    eval_covar = points_diff @ (np.diag(wght)) @ (points_diff.T)
+
+    assert np.allclose(mean, eval_mean, 0, atol=5.e-14)
+    # Raised tolerance because CUT8-dim5, CUT8-dim6 fails (actual values ~1e-13)
+    assert np.allclose(covar, eval_covar, 0, atol=5.e-13)

@@ -13,7 +13,8 @@ from ..models.base import LinearModel
 from ..models.measurement.linear import LinearGaussian
 from ..models.measurement import MeasurementModel
 from ..functions import (gauss2sigma, unscented_transform, cubature_transform,
-                         cub_points_and_tf, find_nearest_positive_definite)
+                         cub_points_and_tf, find_nearest_positive_definite,
+                         gauss2cut, conjugate_unscented_transform, get_cut_points)
 from ..measures import Measure, Euclidean
 
 
@@ -1040,3 +1041,83 @@ class StochasticIntegrationUpdater(KalmanUpdater):
             Pzp.view(CovarianceMatrix),
             cross_covar=cross_covar,
         )
+
+
+class CUTKalmanUpdater(KalmanUpdater):
+    """The Conjugate Unscented Transform (CUT) Kalman Filter version of the
+    Kalman Updater. Inherits most of the functionality from :class:`~.KalmanUpdater`
+    and behaves similarly to the Unscented Kalman Filter given they are both
+    quadrature methods.  The advantage is that CUT sigma points represent
+    a higher order filter (4th, 6th, or 8th order in this algorithm).  Future
+    work will allow the calculation of higher order moments.
+
+    In this case the :meth:`predict_measurement` function uses the
+    :func:`conjugate_unscented_transform` function to estimate a predicted
+    measurement. This is then updated via the standard Kalman update equations.
+
+    """
+    # Can be non-linear and non-differentiable
+    measurement_model: MeasurementModel = Property(
+        default=None,
+        doc="The measurement model to be used. This need not be defined if a "
+            "measurement model is provided in the measurement. If no model "
+            "specified on construction, or in the measurement, then error "
+            "will be thrown.")
+    cut_order: int = Property(
+            default=4,
+            doc="The order of the polynomial in which the conjugate unscented "
+            "transform can integrate exactly. Default is fourth-order. State "
+            "dimension must be between 2 and 10 for fourth order CUT; 2 and 9 "
+            "for sixth order CUT; 2 and 6 for eighth order CUT.")
+    noise_distribution: str = Property(
+            default='gaussian',
+            doc="The distribution which defines the CUT sigma points.")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.nrmSigmaPts = None
+        self.sig_wghts = None
+
+    @lru_cache()
+    def predict_measurement(self, predicted_state, measurement_model=None, **kwargs):
+        """Conjugate Unscented Kalman Filter measurement prediction step. Uses
+        the conjugate unscented transform to estimate a Gauss-distributed predicted
+        measurement.
+
+        Parameters
+        ----------
+        predicted_state : :class:`~.GaussianStatePrediction`
+            A predicted state
+        measurement_model : :class:`~.MeasurementModel`, optional
+            The measurement model used to generate the measurement prediction.
+            This should be used in cases where the measurement model is
+            dependent on the received measurement (the default is `None`, in
+            which case the updater will use the measurement model specified on
+            initialization)
+
+        Returns
+        -------
+        : :class:`~.GaussianMeasurementPrediction`
+            The measurement prediction
+
+        """
+        measurement_model = self._check_measurement_model(measurement_model)
+
+        if self.nrmSigmaPts is None or self.sig_wghts is None:
+            CUTpts, wght = get_cut_points(predicted_state.ndim,
+                                          self.cut_order,
+                                          distribution=self.noise_distribution)
+            self.nrmSigmaPts = CUTpts
+            self.sig_wghts = wght
+
+        sigma_point_states = gauss2cut(predicted_state, self.nrmSigmaPts)
+
+        meas_pred_mean, meas_pred_covar, cross_covar, sigma_points_t, _ = \
+            conjugate_unscented_transform(
+                sigma_point_states, self.sig_wghts,
+                measurement_model.function,
+                covar_noise=measurement_model.covar())
+
+        return MeasurementPrediction.from_state(
+            predicted_state, meas_pred_mean, meas_pred_covar, cross_covar=cross_covar)

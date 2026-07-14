@@ -366,8 +366,9 @@ class Plotter(_Plotter):
             self.legend_dict[name] = clutter_handle
 
         # Generate legend
-        artists.append(self.ax.legend(handles=self.legend_dict.values(),
-                                      labels=self.legend_dict.keys()))
+        if self.legend_dict:
+            artists.append(self.ax.legend(handles=self.legend_dict.values(),
+                                          labels=self.legend_dict.keys()))
         return artists
 
     def plot_tracks(self, tracks, mapping, uncertainty=False, particle=False, label="Tracks",
@@ -478,11 +479,7 @@ class Plotter(_Plotter):
                         check += 1
                         if check % err_freq:
                             continue
-                        w, v = np.linalg.eig(HH @ state.covar @ HH.T)
-                        if np.iscomplexobj(w) or np.iscomplexobj(v):
-                            warnings.warn("Can not plot uncertainty for all states due to complex "
-                                          "eigenvalues or eigenvectors", UserWarning)
-                            continue
+                        w, v = np.linalg.eigh(HH @ state.covar @ HH.T)
                         max_ind = np.argmax(w)
                         min_ind = np.argmin(w)
                         orient = np.arctan2(v[1, max_ind], v[0, max_ind])
@@ -510,7 +507,7 @@ class Plotter(_Plotter):
                     check = err_freq
                     for state in track:
                         if not check % err_freq:
-                            w, v = np.linalg.eig(HH @ state.covar @ HH.T)
+                            w, v = np.linalg.eigh(HH @ state.covar @ HH.T)
 
                             xl = state.state_vector[mapping[0]]
                             yl = state.state_vector[mapping[1]]
@@ -1481,7 +1478,22 @@ class Plotterly(_Plotter):
             if self.dimension == 1:  # plot 1D tracks
 
                 if particle:
-                    raise NotImplementedError
+                    name = track_kwargs['legendgroup'] + "<br>(Particles)"
+                    add_legend = name not in {trace.legendgroup for trace in self.fig.data}
+                    for state in track:
+                        particle_kwargs = dict(
+                            mode='markers', marker=dict(size=2),
+                            opacity=0.4, hoverinfo='skip',
+                            legendgroup=name, name=name,
+                            legendrank=track_kwargs['legendrank'] + 20)
+                        if add_legend:
+                            particle_kwargs['showlegend'] = True
+                            add_legend = False
+                        else:
+                            particle_kwargs['showlegend'] = False
+                        data = state.state_vector[mapping[0], :]
+                        self.fig.add_scattergl(x=[state.timestamp]*len(data), y=data,
+                                               **particle_kwargs)
 
                 if uncertainty:
                     err_y = []
@@ -1507,6 +1519,41 @@ class Plotterly(_Plotter):
                     **scatter_kwargs)
 
             elif self.dimension == 2:  # plot 2D tracks
+
+                if uncertainty:
+                    name = track_kwargs['legendgroup'] + "<br>(Ellipses)"
+                    add_legend = name not in {trace.legendgroup for trace in self.fig.data}
+                    ellipse_kwargs = dict(
+                        mode='none', fill='toself', fillcolor=track_colors[track],
+                        opacity=0.2, hoverinfo='skip',
+                        legendgroup=name, name=name,
+                        legendrank=track_kwargs['legendrank'] + 10)
+                    for state in track:
+                        points = self._generate_ellipse_points(state, mapping, ellipse_points)
+                        if add_legend:
+                            ellipse_kwargs['showlegend'] = True
+                            add_legend = False
+                        else:
+                            ellipse_kwargs['showlegend'] = False
+
+                        self.fig.add_scatter(x=points[0, :], y=points[1, :], **ellipse_kwargs)
+
+                if particle:
+                    name = track_kwargs['legendgroup'] + "<br>(Particles)"
+                    add_legend = name not in {trace.legendgroup for trace in self.fig.data}
+                    for state in track:
+                        particle_kwargs = dict(
+                            mode='markers', marker=dict(size=2),
+                            opacity=0.4, hoverinfo='skip',
+                            legendgroup=name, name=name,
+                            legendrank=track_kwargs['legendrank'] + 20)
+                        if add_legend:
+                            particle_kwargs['showlegend'] = True
+                            add_legend = False
+                        else:
+                            particle_kwargs['showlegend'] = False
+                        data = state.state_vector[mapping[:2], :]
+                        self.fig.add_scattergl(x=data[0], y=data[1], **particle_kwargs)
 
                 self.fig.add_scatter(
                     x=[float(getattr(state, 'mean', state.state_vector)[mapping[0]])
@@ -1559,49 +1606,11 @@ class Plotterly(_Plotter):
                                    or self.fig.data[-1].marker.color
                                    or self.get_next_color())
 
-        # earlier checking means this only applies to 2D.
-        if uncertainty and self.dimension == 2:
-            name = track_kwargs['legendgroup'] + "<br>(Ellipses)"
-            add_legend = name not in {trace.legendgroup for trace in self.fig.data}
-            for track in tracks:
-                ellipse_kwargs = dict(
-                    mode='none', fill='toself', fillcolor=track_colors[track],
-                    opacity=0.2, hoverinfo='skip',
-                    legendgroup=name, name=name,
-                    legendrank=track_kwargs['legendrank'] + 10)
-                for state in track:
-                    points = self._generate_ellipse_points(state, mapping, ellipse_points)
-                    if add_legend:
-                        ellipse_kwargs['showlegend'] = True
-                        add_legend = False
-                    else:
-                        ellipse_kwargs['showlegend'] = False
-
-                    self.fig.add_scatter(x=points[0, :], y=points[1, :], **ellipse_kwargs)
-
-        if particle and self.dimension == 2:
-            name = track_kwargs['legendgroup'] + "<br>(Particles)"
-            add_legend = name not in {trace.legendgroup for trace in self.fig.data}
-            for track in tracks:
-                for state in track:
-                    particle_kwargs = dict(
-                        mode='markers', marker=dict(size=2),
-                        opacity=0.4, hoverinfo='skip',
-                        legendgroup=name, name=name,
-                        legendrank=track_kwargs['legendrank'] + 20)
-                    if add_legend:
-                        particle_kwargs['showlegend'] = True
-                        add_legend = False
-                    else:
-                        particle_kwargs['showlegend'] = False
-                    data = state.state_vector[mapping[:2], :]
-                    self.fig.add_scattergl(x=data[0], y=data[1], **particle_kwargs)
-
     @staticmethod
     def _generate_ellipse_points(state, mapping, n_points=30):
         """Generate error ellipse points for given state and mapping"""
         HH = np.eye(state.ndim)[mapping, :]  # Get position mapping matrix
-        w, v = np.linalg.eig(HH @ state.covar @ HH.T)
+        w, v = np.linalg.eigh(HH @ state.covar @ HH.T)
         max_ind = np.argmax(w)
         min_ind = np.argmin(w)
         orient = np.arctan2(v[1, max_ind], v[0, max_ind])
@@ -3338,6 +3347,72 @@ class AnimatedPlotterly(_Plotter):
 
         # we have called a plotting function so update flag (used in _resize)
         self.plotting_function_called = True
+
+    def plot_sensor_fov(self, sensor_set, sensor_history, colour='blue', alpha=0.2,
+                        label="Sensor FOV"):
+        """
+        Plots the field of view of sensors.
+
+        Parameters
+        ----------
+        fig_: plotly figure object
+        sensor_set: Collection of :class:`~.Sensor`
+            Set of sensors
+        sensor_history: dict
+            Dictionary mapping timestamps to sensor states
+        colour: str
+            Colour of the sensor FOV
+        alpha: float
+            Indicating the transparency of the sensor FOV
+        label: string
+            Label for the sensor FOV
+        """
+        trace_base = len(self.fig.data)
+        for _ in sensor_set:
+            self.fig.add_trace(go.Scatter(
+                mode='lines', line=go.scatter.Line(color='black')))
+            self.fig.add_trace(go.Scatter(
+                mode='markers', marker=dict(color=colour, size=6),
+                showlegend=False, hoverinfo='skip'))
+
+        for frame in self.fig.frames:
+            traces_ = list(frame.traces)
+            data_ = list(frame.data)
+
+            timestring = frame.name
+            timestamp = datetime.fromisoformat(timestring)
+
+            for n_, sensor_ in enumerate(sensor_set):
+                if timestamp in sensor_history:
+                    sensor_ = sensor_history[timestamp][sensor_]
+                    theta = sensor_.dwell_centre.flatten()[0]
+                    angles = np.linspace(
+                        theta - sensor_.fov_angle/2, theta + sensor_.fov_angle/2, 100)
+                    arc_x = [
+                        sensor_.position[0],
+                        *(sensor_.position[0] + sensor_.max_range*np.cos(angles)),
+                        sensor_.position[0]
+                        ]
+                    arc_y = [
+                        sensor_.position[1],
+                        *(sensor_.position[1] + sensor_.max_range*np.sin(angles)),
+                        sensor_.position[1]
+                        ]
+                else:
+                    continue
+
+                data_.append(go.Scatter(x=arc_x, y=arc_y, fill='toself', fillcolor=colour,
+                                        line=dict(color=colour), opacity=alpha, name=label,
+                                        mode='lines'))
+                traces_.append(trace_base + 2 * n_)
+
+                data_.append(go.Scatter(x=[sensor_.position[0]], y=[sensor_.position[1]],
+                                        mode='markers', marker=dict(color=colour, size=6),
+                                        showlegend=False, hoverinfo='skip'))
+                traces_.append(trace_base + 2 * n_ + 1)
+
+            frame.traces = traces_
+            frame.data = data_
 
     def plot_obstacles(self, obstacles, label="Obstacles", resize=True,
                        **kwargs):

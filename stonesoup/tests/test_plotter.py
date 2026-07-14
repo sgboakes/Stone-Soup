@@ -237,19 +237,6 @@ def test_plot_density_equal_x_y():
         plotter.plot_density({truth}, index=None)
 
 
-def test_plot_complex_uncertainty():
-    plotter = Plotter()
-    track = Track([
-        GaussianState(
-            state_vector=[0, 0],
-            covar=[[10, -1], [1, 10]])
-    ])
-    with pytest.warns(UserWarning, match="Can not plot uncertainty for all states due to complex "
-                                         "eigenvalues or eigenvectors"):
-
-        plotter.plot_tracks(track, mapping=[0, 1], uncertainty=True)
-
-
 def test_animation_plotter():
     animation_plotter = AnimationPlotter()
     animation_plotter.plot_ground_truths(truth, [0, 2])
@@ -317,9 +304,9 @@ def test_plotterly_1d():
     plotter1d.plot_measurements(true_measurements, [0])
     plotter1d.plot_tracks(track, [0])
 
-    # check that particle=True does not plot
-    with pytest.raises(NotImplementedError):
-        plotter1d.plot_tracks(track, [0], particle=True)
+    # check that particle=True plots particles
+    plotter1d.plot_tracks(track, [0], particle=True)
+    assert "Tracks<br>(Particles)" in {data.legendgroup for data in plotter1d.fig.data}
 
     # check that uncertainty=True plots vertical error bars
     plotter1d.plot_tracks(track, [0], uncertainty=True)
@@ -454,9 +441,8 @@ def test_plotters_plot_measurements_empty_silent(plotter_class, _measurements, _
     "_measurements, _show_clutter",
     [(list(), True), (list(), False), (clutter_measurement_set, False)])
 def test_plotters_plot_measurements_empty_warn(_measurements, _show_clutter):
-    with pytest.warns(UserWarning, match="No artists with labels found to put in legend"):
-        plotter = Plotter()
-        plotter.plot_measurements(_measurements, [0, 2], show_clutter=_show_clutter)
+    plotter = Plotter()
+    plotter.plot_measurements(_measurements, [0, 2], show_clutter=_show_clutter)
 
 
 @pytest.mark.parametrize(
@@ -465,16 +451,15 @@ def test_plotters_plot_measurements_empty_warn(_measurements, _show_clutter):
      (true_measurements, False, len(true_measurements)),
      (all_measurements, False, len(true_measurements)),
      (clutter_measurements, False, None)])
-# Ignore this warning which occurs when there is no data to plot (e.g. last test case here)
-@pytest.mark.filterwarnings("ignore:.*No artists with labels found to put in legend.*:UserWarning")
 def test_plotters_plot_measurements_count_no_clutter(_measurements, _show_clutter,
                                                      expected_plot_truths_length):
     plotter = Plotter()
     artist_list = plotter.plot_measurements(_measurements, [0, 2], show_clutter=_show_clutter)
 
-    expected_number_of_artists = 1  # there is always a legend artist at the end
+    expected_number_of_artists = 0
     if expected_plot_truths_length is not None:
         expected_number_of_artists += 1
+        expected_number_of_artists += 1  # there is a legend artist at the end
     assert len(artist_list) == expected_number_of_artists
 
     if expected_plot_truths_length is not None:
@@ -495,11 +480,13 @@ def test_plotters_plot_measurements_count_with_clutter(_measurements, _show_clut
 
     truths_expected = expected_plot_truths_length is not None
     clutter_expected = expected_plot_clutter_length is not None
-    expected_number_of_artists = 1  # there is always a legend artist at the end
+    expected_number_of_artists = 0
     if truths_expected:
         expected_number_of_artists += 1
     if clutter_expected:
         expected_number_of_artists += 1
+    if truths_expected or clutter_expected:
+        expected_number_of_artists += 1  # there is a legend artist at the end
     assert len(artist_list) == expected_number_of_artists
 
     if truths_expected:
@@ -635,8 +622,6 @@ def test_plotter_plot_measurements_label(_measurements, expected_labels):
                                                     'Measurements\n(Clutter)'}),
                           (all_measurements, False, {'Measurements'})
                           ])
-@pytest.mark.filterwarnings("ignore:.*No artists with labels found to put in legend.*:UserWarning")
-# Ignore this warning which occurs when there is no data to plot
 def test_plotter_plot_measurements_label_adjust_clutter(_measurements,
                                                         _show_clutter,
                                                         expected_labels):

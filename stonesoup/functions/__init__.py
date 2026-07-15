@@ -2,8 +2,11 @@
 
 import copy
 import warnings
+import json
 from collections import defaultdict
 from functools import lru_cache
+from itertools import permutations
+from pathlib import Path
 
 import numpy as np
 from numpy import linalg as LA
@@ -11,7 +14,6 @@ from numpy import linalg as LA
 from scipy.linalg import sqrtm
 from scipy.stats import ortho_group
 
-from .cut_points_gaussian import cut_points_gaussian
 from ..types.array import CovarianceMatrix, StateVector, StateVectors
 from ..types.numeric import Probability
 from ..types.state import State
@@ -1446,3 +1448,83 @@ def get_cut_points(n_dim, cut_order, distribution='gaussian'):
                          """)
 
     return pts, wghts
+
+
+def _orbit_signed_perm(pattern):
+    """All coordinate permutations x sign flips of nonzero entries."""
+    n = len(pattern)
+    pts = set()
+    for perm in set(permutations(pattern)):
+        nz = [i for i, v in enumerate(perm) if abs(v) > 1e-12]
+        for signs in range(2 ** len(nz)):
+            p = list(perm)
+            for k, i in enumerate(nz):
+                if (signs >> k) & 1:
+                    p[i] = -p[i]
+            pts.add(tuple(p))
+    return pts
+
+
+def cut_points_gaussian(n_dim, cut_order):
+    r"""
+    Return CUT sigma points for a Gaussian distribution of zero mean and
+    unity variance.
+
+    Parameters
+    ----------
+    n_dim : int
+        State dimension.
+
+            -If `cut_order = 4`, then bounds for n_dim is :math:`2 \leq n\_dim \leq 10`.
+            -If `cut_order = 6`, then bounds for n_dim is :math:`2 \leq n\_dim \leq 9`.
+            -If `cut_order = 8`, then bounds for n_dim is :math:`2 \leq n\_dim \leq 6`.
+
+    cut_order : int
+        Integer of either 4, 6, or 8 to generate sigma points for fourth,
+        sixth, or eighth order CUT method.
+
+    Returns
+    -------
+    : :class:`numpy.ndarray` of shape `(Np, Ns+1)`
+        An array containing the locations of the sigma points concatenated
+        with the accompanying weights. Np is the number of sigma points,
+        Ns is the state dimension.
+
+    Raises
+    ------
+    ValueError
+        If `n_dim` is out of the bounds for the given `cut_order`.
+
+    References
+    ----------
+    .. [#] N. Adurthi, P. Singla, and T. Singh, "Conjugate Unscented
+           Transformation: Applications to Estimation and Control,"
+           Journal of Dynamic Systems, Measurement, and Control,
+           vol. 140, no. 3, p. 030907, Nov. 2017, doi: 10.1115/1.4037783.
+    """
+    _GEN_PATH = Path(__file__).with_name("cut_generators.json")
+    with open(_GEN_PATH) as _fh:
+        _GENERATORS = json.load(_fh)
+
+    cut_order = int(cut_order)
+    n_dim = int(n_dim)
+
+    bounds = {4: (2, 10), 6: (2, 9), 8: (2, 6)}
+    if cut_order not in bounds:
+        raise ValueError("cut_order must be 4, 6, or 8.")
+    lo, hi = bounds[cut_order]
+    if not (lo <= n_dim <= hi):
+        raise ValueError(
+            f"For {cut_order}th-order CUT, {lo} <= n_dim <= {hi}."
+        )
+
+    key = f"{cut_order}_{n_dim}"
+    generators = _GENERATORS[key]
+
+    rows = []
+    for gen in generators:
+        pattern = tuple(gen["pattern"])
+        weight = gen["weight"]
+        for pt in _orbit_signed_perm(pattern):
+            rows.append((*pt, weight))
+    return np.array(rows)

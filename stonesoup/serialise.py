@@ -44,6 +44,7 @@ import numpy as np
 import ruamel.yaml
 from ruamel.yaml.constructor import ConstructorError
 
+from .base import Base, Property
 from .types.angle import Angle
 from .types.array import Matrix, StateVector
 from .types.numeric import Probability

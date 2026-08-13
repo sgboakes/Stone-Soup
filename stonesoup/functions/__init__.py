@@ -1349,7 +1349,7 @@ def batch_multivariate_normal_logpdf(vectors, states):
 def gauss2cut(state, normed_sigma_pts):
     """
     Approximate a given Gaussian state variable, using a
-    deterministically selected set of normalized sigma points
+    deterministically selected set of normalised sigma points
     representing a zero-mean unity Gaussian distribution.
 
     Parameters
@@ -1360,9 +1360,9 @@ def gauss2cut(state, normed_sigma_pts):
         :class:`~.CovarianceMatrix` of shape `(Ns, Ns)` which is the
         covariance of the distribution
     normed_sigma_pts : :class:`~StateVectors`
-        Deterministically selected set of normalized sigma points
+        Deterministically selected set of normalised sigma points
         representing a zero-mean unity Gaussian distribution.  Must be
-        of shape `(Ns, Np)` where `Np` is the number of normalized sigma
+        of shape `(Ns, Np)` where `Np` is the number of normalised sigma
         points, i.e. is a function of the quadrature method chosen
         outside of this function.
 
@@ -1397,7 +1397,7 @@ def gauss2cut(state, normed_sigma_pts):
 
 
 # TODO: Possible rename because it should be viable for any quadrature method
-def conjugate_unscented_transform(sigma_points_states, wghts, fun,
+def conjugate_unscented_transform(sigma_points_states, weights, fun,
                                   points_noise=None, covar_noise=None):
     """
     Use the Conjugate Unscented Transform to approximate the mean and
@@ -1412,7 +1412,7 @@ def conjugate_unscented_transform(sigma_points_states, wghts, fun,
     ----------
     sigma_points_states : `list` of length `(Np)`
         List of state objects corresponding to the Np sigma points
-    wghts : :class:`numpy.ndarray` of shape `(Np,)`
+    weights : :class:`numpy.ndarray` of shape `(Np,)`
         An array containing the sigma point weights
     fun : function handle
         A (non-linear) transition function
@@ -1442,7 +1442,7 @@ def conjugate_unscented_transform(sigma_points_states, wghts, fun,
     # Reconstruct the sigma_points matrix
     sigma_points = StateVectors([
         sigma_points_state.state_vector for sigma_points_state in sigma_points_states])
-    sigma_mean = np.average(sigma_points, axis=1, weights=wghts)
+    sigma_mean = np.average(sigma_points, axis=1, weights=weights)
 
     # Transform points through f
     if points_noise is None:
@@ -1452,23 +1452,22 @@ def conjugate_unscented_transform(sigma_points_states, wghts, fun,
         sigma_points_t = StateVectors([
             fun(sigma_points_state, points_noise)  # is this a bug?
             for sigma_points_state, point_noise in zip(sigma_points_states, points_noise.T)])
-        # This is probably a bug and it's in the original UT function.
 
     # Calculate mean and covariance approximation
-    mean, covar = sigma2gauss(sigma_points_t, wghts, wghts, covar_noise)
+    mean, covar = sigma2gauss(sigma_points_t, weights, weights, covar_noise)
 
     # Calculate cross-covariance
     cross_covar = (
-        (sigma_points-sigma_mean) @ np.diag(wghts) @ (sigma_points_t-mean).T
+        (sigma_points-sigma_mean) @ np.diag(weights) @ (sigma_points_t-mean).T
         ).view(CovarianceMatrix)
 
-    return mean, covar, cross_covar, sigma_points_t, wghts
+    return mean, covar, cross_covar, sigma_points_t, weights
 
 
 def get_cut_points(n_dim, cut_order, distribution='gaussian'):
     r"""
-    Function to retieve normalized sigma points for the Conjugate Unscented Transform.
-    Takes the :class:`numpy.ndarray` from the sigma point storage files and renormalizes
+    Function to retrieve normalised sigma points for the Conjugate Unscented Transform.
+    Takes the :class:`numpy.ndarray` from the sigma point storage files and renormalises
     the sigma points to reduce truncation errors.
 
     Parameters
@@ -1482,7 +1481,7 @@ def get_cut_points(n_dim, cut_order, distribution='gaussian'):
         sixth, or eighth order CUT method.
 
     distribution: str
-        From what distribution to genereate the CUT sigma points.  As currently
+        From what distribution to generate the CUT sigma points.  As currently
         implemented, 'gaussian' is the only available option.
 
     Raises
@@ -1493,26 +1492,25 @@ def get_cut_points(n_dim, cut_order, distribution='gaussian'):
     if distribution == 'gaussian':
         nrm_cut_pts_weights = cut_points_gaussian(n_dim, cut_order)
 
-        # renormalize weights return (fixes some truncation error)
-        wghts = nrm_cut_pts_weights[:, -1]
-        wghts = wghts/sum(wghts)
+        # Renormalise weights return (fixes some truncation error)
+        weights = nrm_cut_pts_weights[:, -1]
+        weights = weights/sum(weights)
 
-        # renormalize points return (fixes some truncation error)
-        pts = StateVectors(nrm_cut_pts_weights[:, 0:-1].T)
-        num_covar = pts@np.diag(wghts)@pts.T
-        pts = np.linalg.inv(np.linalg.cholesky(num_covar))@pts
+        # Renormalise points return (fixes some truncation error)
+        points = StateVectors(nrm_cut_pts_weights[:, 0:-1].T)
+        num_covar = points @ np.diag(weights) @ points.T
+        points = np.linalg.inv(np.linalg.cholesky(num_covar)) @ points
 
     else:
         raise ValueError("""Please define "distribution" as: "gaussian."
                          """)
 
-    return pts, wghts
+    return points, weights
 
 
 def _orbit_signed_perm(pattern):
     """All coordinate permutations x sign flips of nonzero entries."""
-    n = len(pattern)
-    pts = set()
+    points = set()
     for perm in set(permutations(pattern)):
         nz = [i for i, v in enumerate(perm) if abs(v) > 1e-12]
         for signs in range(2 ** len(nz)):
@@ -1520,8 +1518,8 @@ def _orbit_signed_perm(pattern):
             for k, i in enumerate(nz):
                 if (signs >> k) & 1:
                     p[i] = -p[i]
-            pts.add(tuple(p))
-    return pts
+            points.add(tuple(p))
+    return points
 
 
 def cut_points_gaussian(n_dim, cut_order):

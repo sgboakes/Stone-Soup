@@ -1076,11 +1076,12 @@ class CUTKalmanUpdater(KalmanUpdater):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.nrmSigmaPts = None
-        self.sig_wghts = None
+        self.nrm_sigma_pts = None
+        self.sig_weights = None
 
     @lru_cache()
-    def predict_measurement(self, predicted_state, measurement_model=None, **kwargs):
+    def predict_measurement(self, predicted_state, measurement_model=None, measurement_noise=True,
+                            **kwargs):
         """Conjugate Unscented Kalman Filter measurement prediction step. Uses
         the conjugate unscented transform to estimate a Gauss-distributed predicted
         measurement.
@@ -1094,7 +1095,9 @@ class CUTKalmanUpdater(KalmanUpdater):
             This should be used in cases where the measurement model is
             dependent on the received measurement (the default is `None`, in
             which case the updater will use the measurement model specified on
-            initialization)
+            initialisation)
+        measurement_noise : bool
+            Whether to include measurement noise :math:`R` with innovation covariance
 
         Returns
         -------
@@ -1103,21 +1106,22 @@ class CUTKalmanUpdater(KalmanUpdater):
 
         """
         measurement_model = self._check_measurement_model(measurement_model)
+        covar_noise = measurement_model.covar(**kwargs) if measurement_noise else None
 
-        if self.nrmSigmaPts is None or self.sig_wghts is None:
-            CUTpts, wght = get_cut_points(predicted_state.ndim,
-                                          self.cut_order,
-                                          distribution=self.noise_distribution)
-            self.nrmSigmaPts = CUTpts
-            self.sig_wghts = wght
+        if self.nrm_sigma_pts is None or self.sig_weights is None:
+            cut_points, weight = get_cut_points(predicted_state.ndim,
+                                                self.cut_order,
+                                                distribution=self.noise_distribution)
+            self.nrm_sigma_pts = cut_points
+            self.sig_weights = weight
 
-        sigma_point_states = gauss2cut(predicted_state, self.nrmSigmaPts)
+        sigma_point_states = gauss2cut(predicted_state, self.nrm_sigma_pts)
 
         meas_pred_mean, meas_pred_covar, cross_covar, sigma_points_t, _ = \
             conjugate_unscented_transform(
-                sigma_point_states, self.sig_wghts,
+                sigma_point_states, self.sig_weights,
                 measurement_model.function,
-                covar_noise=measurement_model.covar())
+                covar_noise=covar_noise)
 
         return MeasurementPrediction.from_state(
             predicted_state, meas_pred_mean, meas_pred_covar, cross_covar=cross_covar)

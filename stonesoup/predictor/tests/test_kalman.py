@@ -216,5 +216,3 @@ def test_cut_kalman(cut_ord, transition_model,
     assert np.allclose(prediction.covar,
                        eval_prediction.covar, 0, atol=1.e-13)
     assert prediction.timestamp == new_timestamp
-
-    # TODO: Test with Control Model

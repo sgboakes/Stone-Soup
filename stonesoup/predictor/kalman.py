@@ -791,7 +791,7 @@ class CUTKalmanPredictor(KalmanPredictor):
             control_input=control_input,
             time_interval=predict_over_interval)
 
-        x_pred, p_pred, _, sigma_points_t, _ = conjugate_unscented_transform(
+        x_pred, p_pred, _, sigma_points_t, _, = conjugate_unscented_transform(
             sigma_point_states, self.sig_wghts,
             transition_and_control_function,
             covar_noise=total_noise_covar
